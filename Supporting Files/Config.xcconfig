@@ -1,0 +1,7 @@
+PRODUCT_NAME                   = SQLite
+
+APPLICATION_EXTENSION_API_ONLY = YES
+
+INFOPLIST_FILE                 = Supporting Files/Info.plist
+
+OTHER_LDFLAGS                  = -lsqlite3

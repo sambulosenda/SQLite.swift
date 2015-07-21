@@ -34,46 +34,44 @@ syntax _and_ intent.
 ``` swift
 import SQLite
 
-let db = Database("path/to/db.sqlite3")
+let db = try Connection("path/to/db.sqlite3")
 
-let users = db["users"]
+let users = Table("users")
 let id = Expression<Int64>("id")
 let name = Expression<String?>("name")
 let email = Expression<String>("email")
 
-db.create(table: users) { t in
+db.run(users.create { t in
     t.column(id, primaryKey: true)
     t.column(name)
     t.column(email, unique: true)
-}
+})
 // CREATE TABLE "users" (
 //     "id" INTEGER PRIMARY KEY NOT NULL,
 //     "name" TEXT,
 //     "email" TEXT NOT NULL UNIQUE
 // )
 
-var alice: Query?
-if let rowid = users.insert(name <- "Alice", email <- "alice@mac.com").rowid {
-    println("inserted id: \(rowid)")
-    // inserted id: 1
-    alice = users.filter(id == rowid)
-}
+let insert = users.insert(name <- "Alice", email <- "alice@mac.com")
+let rowid = try db.run(insert)
 // INSERT INTO "users" ("name", "email") VALUES ('Alice', 'alice@mac.com')
 
-for user in users {
+for user in try db.prepare(users) {
     println("id: \(user[id]), name: \(user[name]), email: \(user[email])")
     // id: 1, name: Optional("Alice"), email: alice@mac.com
 }
 // SELECT * FROM "users"
 
-alice?.update(email <- replace(email, "mac.com", "me.com"))
+let alice = users.filter(id == rowid)
+
+try db.run(alice.update(email <- email.replace("mac.com", "me.com")))
 // UPDATE "users" SET "email" = replace("email", 'mac.com', 'me.com')
 // WHERE ("id" = 1)
 
-alice?.delete()
+try db.run(alice.delete())
 // DELETE FROM "users" WHERE ("id" = 1)
 
-users.count
+let count = try db.scalar(users.count)
 // SELECT count(*) FROM "users"
 ```
 
@@ -107,8 +105,7 @@ interactively, from the Xcode project’s playground.
 
 ## Installation
 
-> _Note:_ SQLite.swift requires Swift 1.2 (and [Xcode][] 6.3) or
-> greater.
+> _Note:_ SQLite.swift requires Swift 2 (and [Xcode][] 7) or greater.
 >
 > The following instructions apply to targets that support embedded
 > Swift frameworks. To use SQLite.swift in iOS 7 or an OS X command line
