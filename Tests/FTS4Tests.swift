@@ -17,15 +17,29 @@ class FTS4Tests : XCTestCase {
             virtualTable.create(.FTS4(tokenize: .Simple))
         )
         XCTAssertEqual(
-            "CREATE VIRTUAL TABLE \"virtual_table\" USING fts4(\"string\", tokenize=simple)",
-            virtualTable.create(.FTS4([string], tokenize: .Simple))
+            "CREATE VIRTUAL TABLE \"virtual_table\" USING fts4(\"string\", tokenize=porter)",
+            virtualTable.create(.FTS4([string], tokenize: .Porter))
+        )
+        XCTAssertEqual(
+            "CREATE VIRTUAL TABLE \"virtual_table\" USING fts4(tokenize=unicode61 \"removeDiacritics=0\")",
+            virtualTable.create(.FTS4(tokenize: .Unicode61(removeDiacritics: false)))
+        )
+        XCTAssertEqual(
+            "CREATE VIRTUAL TABLE \"virtual_table\" USING fts4(tokenize=unicode61 \"removeDiacritics=1\" \"tokenchars=.\" \"separators=X\")",
+            virtualTable.create(.FTS4(tokenize: .Unicode61(removeDiacritics: true, tokenchars: ["."], separators: ["X"])))
         )
     }
 
-    func test_match_onVirtualTable_compilesMatchExpression() {
-        AssertSQL("(\"virtual_table\" MATCH 'string')", virtualTable.match("string"))
-        AssertSQL("(\"virtual_table\" MATCH \"string\")", virtualTable.match(string))
-        AssertSQL("(\"virtual_table\" MATCH \"stringOptional\")", virtualTable.match(stringOptional))
+    func test_match_onVirtualTableAsExpression_compilesMatchExpression() {
+        AssertSQL("(\"virtual_table\" MATCH 'string')", virtualTable.match("string") as Expression<Bool>)
+        AssertSQL("(\"virtual_table\" MATCH \"string\")", virtualTable.match(string) as Expression<Bool>)
+        AssertSQL("(\"virtual_table\" MATCH \"stringOptional\")", virtualTable.match(stringOptional) as Expression<Bool?>)
+    }
+
+    func test_match_onVirtualTableAsQueryType_compilesMatchExpression() {
+        AssertSQL("SELECT * FROM \"virtual_table\" WHERE (\"virtual_table\" MATCH 'string')", virtualTable.match("string") as QueryType)
+        AssertSQL("SELECT * FROM \"virtual_table\" WHERE (\"virtual_table\" MATCH \"string\")", virtualTable.match(string) as QueryType)
+        AssertSQL("SELECT * FROM \"virtual_table\" WHERE (\"virtual_table\" MATCH \"stringOptional\")", virtualTable.match(stringOptional) as QueryType)
     }
 
 }
@@ -54,7 +68,7 @@ class FTS4IntegrationTests : SQLiteTestCase {
         }
 
         try! db.run(emails.create(.FTS4([subject, body], tokenize: .Custom(tokenizerName))))
-        AssertSQL("CREATE VIRTUAL TABLE \"emails\" USING fts4(\"subject\", \"body\", tokenize=\"SQLite.swift\" 'tokenizer')")
+        AssertSQL("CREATE VIRTUAL TABLE \"emails\" USING fts4(\"subject\", \"body\", tokenize=\"SQLite.swift\" \"tokenizer\")")
 
         try! db.run(emails.insert(subject <- "Aún más cáfe!"))
         XCTAssertEqual(1, try! db.scalar(emails.filter(emails.match("aun")).count))

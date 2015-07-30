@@ -22,7 +22,7 @@
 // THE SOFTWARE.
 //
 
-extension QueryType {
+extension SchemaType {
 
     // MARK: - DROP TABLE / VIEW / VIRTUAL TABLE
 

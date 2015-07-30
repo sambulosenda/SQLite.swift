@@ -48,7 +48,7 @@ class ConnectionTests : SQLiteTestCase {
     }
 
     func test_lastInsertRowid_returnsLastIdAfterInserts() {
-        InsertUser("alice")
+        try! InsertUser("alice")
         XCTAssertEqual(1, db.lastInsertRowid!)
     }
 
@@ -57,17 +57,17 @@ class ConnectionTests : SQLiteTestCase {
     }
 
     func test_changes_returnsNumberOfChanges() {
-        InsertUser("alice")
+        try! InsertUser("alice")
         XCTAssertEqual(1, db.changes)
-        InsertUser("betsy")
+        try! InsertUser("betsy")
         XCTAssertEqual(1, db.changes)
     }
 
     func test_totalChanges_returnsTotalNumberOfChanges() {
         XCTAssertEqual(0, db.totalChanges)
-        InsertUser("alice")
+        try! InsertUser("alice")
         XCTAssertEqual(1, db.totalChanges)
-        InsertUser("betsy")
+        try! InsertUser("betsy")
         XCTAssertEqual(2, db.totalChanges)
     }
 
@@ -94,33 +94,196 @@ class ConnectionTests : SQLiteTestCase {
         AssertSQL("SELECT count(*) FROM users WHERE admin = 0", 4)
     }
 
+    func test_transaction_executesBeginDeferred() {
+        try! db.transaction(.Deferred) {}
+
+        AssertSQL("BEGIN DEFERRED TRANSACTION")
+    }
+
+    func test_transaction_executesBeginImmediate() {
+        try! db.transaction(.Immediate) {}
+
+        AssertSQL("BEGIN IMMEDIATE TRANSACTION")
+    }
+
+    func test_transaction_executesBeginExclusive() {
+        try! db.transaction(.Exclusive) {}
+
+        AssertSQL("BEGIN EXCLUSIVE TRANSACTION")
+    }
+
     func test_transaction_beginsAndCommitsTransactions() {
-        let stmt = try! db.prepare("INSERT INTO users (email, admin) VALUES (?, ?)", "alice@example.com", 1)
+        let stmt = try! db.prepare("INSERT INTO users (email) VALUES (?)", "alice@example.com")
 
         try! db.transaction {
             try stmt.run()
         }
 
         AssertSQL("BEGIN DEFERRED TRANSACTION")
-        AssertSQL("INSERT INTO users (email, admin) VALUES ('alice@example.com', 1)")
+        AssertSQL("INSERT INTO users (email) VALUES ('alice@example.com')")
         AssertSQL("COMMIT TRANSACTION")
         AssertSQL("ROLLBACK TRANSACTION", 0)
     }
 
     func test_transaction_beginsAndRollsTransactionsBack() {
-        let stmt = try! db.run("INSERT INTO users (email, admin) VALUES (?, ?)", "alice@example.com", 1)
+        let stmt = try! db.prepare("INSERT INTO users (email) VALUES (?)", "alice@example.com")
 
         do {
             try db.transaction {
+                try stmt.run()
                 try stmt.run()
             }
         } catch {
         }
 
         AssertSQL("BEGIN DEFERRED TRANSACTION")
-        AssertSQL("INSERT INTO users (email, admin) VALUES ('alice@example.com', 1)", 2)
+        AssertSQL("INSERT INTO users (email) VALUES ('alice@example.com')", 2)
         AssertSQL("ROLLBACK TRANSACTION")
         AssertSQL("COMMIT TRANSACTION", 0)
+    }
+
+    func test_savepoint_beginsAndCommitsSavepoints() {
+        let db = self.db
+
+        try! db.savepoint("1") {
+            try db.savepoint("2") {
+                try db.run("INSERT INTO users (email) VALUES (?)", "alice@example.com")
+            }
+        }
+
+        AssertSQL("SAVEPOINT '1'")
+        AssertSQL("SAVEPOINT '2'")
+        AssertSQL("INSERT INTO users (email) VALUES ('alice@example.com')")
+        AssertSQL("RELEASE SAVEPOINT '2'")
+        AssertSQL("RELEASE SAVEPOINT '1'")
+        AssertSQL("ROLLBACK TO SAVEPOINT '2'", 0)
+        AssertSQL("ROLLBACK TO SAVEPOINT '1'", 0)
+    }
+
+    func test_savepoint_beginsAndRollsSavepointsBack() {
+        let db = self.db
+        let stmt = try! db.prepare("INSERT INTO users (email) VALUES (?)", "alice@example.com")
+
+        do {
+            try db.savepoint("1") {
+                try db.savepoint("2") {
+                    try stmt.run()
+                    try stmt.run()
+                    try stmt.run()
+                }
+                try db.savepoint("2") {
+                    try stmt.run()
+                    try stmt.run()
+                    try stmt.run()
+                }
+            }
+        } catch {
+        }
+
+        AssertSQL("SAVEPOINT '1'")
+        AssertSQL("SAVEPOINT '2'")
+        AssertSQL("INSERT INTO users (email) VALUES ('alice@example.com')", 2)
+        AssertSQL("ROLLBACK TO SAVEPOINT '2'")
+        AssertSQL("ROLLBACK TO SAVEPOINT '1'")
+        AssertSQL("RELEASE SAVEPOINT '2'", 0)
+        AssertSQL("RELEASE SAVEPOINT '1'", 0)
+    }
+
+    func test_updateHook_setsUpdateHook() {
+        async { done in
+            db.updateHook { operation, db, table, rowid in
+                XCTAssertEqual(.Insert, operation)
+                XCTAssertEqual("main", db)
+                XCTAssertEqual("users", table)
+                XCTAssertEqual(1, rowid)
+                done()
+            }
+            try! InsertUser("alice")
+        }
+    }
+
+    func test_commitHook_setsCommitHook() {
+        async { done in
+            db.commitHook {
+                done()
+            }
+            try! db.transaction {
+                try InsertUser("alice")
+            }
+            XCTAssertEqual(1, try! db.scalar("SELECT count(*) FROM users") as! Int64)
+        }
+    }
+
+    func test_rollbackHook_setsRollbackHook() {
+        async { done in
+            db.rollbackHook(done)
+            do {
+                try db.transaction {
+                    try self.InsertUser("alice")
+                    try self.InsertUser("alice") // throw
+                }
+            } catch {
+            }
+            XCTAssertEqual(0, try! db.scalar("SELECT count(*) FROM users") as! Int64)
+        }
+    }
+
+    func test_commitHook_withRollback_rollsBack() {
+        async { done in
+            db.commitHook {
+                throw NSError(domain: "com.stephencelis.SQLiteTests", code: 1, userInfo: nil)
+            }
+            db.rollbackHook(done)
+            do {
+                try db.transaction {
+                    try self.InsertUser("alice")
+                }
+            } catch {
+            }
+            XCTAssertEqual(0, try! db.scalar("SELECT count(*) FROM users") as! Int64)
+        }
+    }
+
+    func test_createFunction_withArrayArguments() {
+        try! db.createFunction("hello") { $0[0].map { "Hello, \($0)!" } }
+
+        XCTAssertEqual("Hello, world!", try! db.scalar("SELECT hello('world')") as! String)
+        XCTAssert(try! db.scalar("SELECT hello(NULL)") == nil)
+    }
+
+    func test_createFunction_createsQuotableFunction() {
+        try! db.createFunction("hello world") { $0[0].map { "Hello, \($0)!" } }
+
+        XCTAssertEqual("Hello, world!", try! db.scalar("SELECT \"hello world\"('world')") as! String)
+        XCTAssert(try! db.scalar("SELECT \"hello world\"(NULL)") == nil)
+    }
+
+    func test_createCollation_createsCollation() {
+        try! db.createCollation("NODIACRITIC") { lhs, rhs in
+            return lhs.compare(rhs, options: .DiacriticInsensitiveSearch)
+        }
+        XCTAssertEqual(1, try! db.scalar("SELECT ? = ? COLLATE NODIACRITIC", "cafe", "café") as! Int64)
+    }
+
+    func test_createCollation_createsQuotableCollation() {
+        try! db.createCollation("NO DIACRITIC") { lhs, rhs in
+            return lhs.compare(rhs, options: .DiacriticInsensitiveSearch)
+        }
+        XCTAssertEqual(1, try! db.scalar("SELECT ? = ? COLLATE \"NO DIACRITIC\"", "cafe", "café") as! Int64)
+    }
+
+    func test_interrupt_interruptsLongRunningQuery() {
+        try! InsertUsers("abcdefghijklmnopqrstuvwxyz".characters.map { String($0) })
+        try! db.createFunction("sleep") { args in
+            usleep(UInt32(Double(args[0] as? Double ?? Double(args[0] as? Int64 ?? 1)) * 1_000_000))
+            return nil
+        }
+
+        let stmt = try! db.prepare("SELECT *, sleep(?) FROM users", 0.1)
+        try! stmt.run()
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, Int64(10 * NSEC_PER_MSEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), db.interrupt)
+        AssertThrows(try stmt.run())
     }
 
 }

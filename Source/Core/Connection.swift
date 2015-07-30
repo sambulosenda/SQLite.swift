@@ -43,6 +43,8 @@ public final class Connection {
     public init(_ location: Location = .InMemory, readonly: Bool = false) throws {
         let flags = readonly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE
         try check(sqlite3_open_v2(location.description, &handle, flags | SQLITE_OPEN_FULLMUTEX, nil))
+
+        dispatch_queue_set_specific(queue, Connection.queueKey, queueContext, nil)
     }
 
     // TODO: add 'Throws:' documentation here and so on
@@ -257,7 +259,7 @@ public final class Connection {
     ///     The transaction will be committed when the block returns. The block
     ///     must throw to roll the transaction back.
     // TODO: consider not requiring a throw to roll back?
-    public func transaction(mode: TransactionMode = .Deferred, @noescape block: () throws -> Void) throws {
+    public func transaction(mode: TransactionMode = .Deferred, block: () throws -> Void) throws {
         try transaction("BEGIN \(mode.rawValue) TRANSACTION", block, "COMMIT TRANSACTION", or: "ROLLBACK TRANSACTION")
     }
 
@@ -275,20 +277,30 @@ public final class Connection {
     ///     The block must throw to roll the savepoint back.
     // TODO: consider not requiring a throw to roll back?
     // TODO: consider removing ability to set a name?
-    public func savepoint(name: String = NSUUID().UUIDString, @noescape block: () throws -> Void) throws {
-        let savepoint = "SAVEPOINT \(name.quote())"
+    public func savepoint(name: String = NSUUID().UUIDString, block: () throws -> Void) throws {
+        let name = name.quote("'")
+        let savepoint = "SAVEPOINT \(name)"
+
         try transaction(savepoint, block, "RELEASE \(savepoint)", or: "ROLLBACK TO \(savepoint)")
     }
 
-    private func transaction(begin: String, @noescape _ block: () throws -> Void, _ commit: String, or rollback: String) throws {
-        try run(begin)
-        do {
-            try block()
-            try run(commit)
-        } catch {
-            try run(rollback)
-            throw error
+    // FIXME: rdar://problem/21389236
+    private func transaction(begin: String, _ block: () throws -> Void, _ commit: String, or rollback: String) throws {
+        return try sync {
+            try self.run(begin)
+            do {
+                try block()
+            } catch {
+                try self.run(rollback)
+                throw error
+            }
+            try self.run(commit)
         }
+    }
+
+    /// Interrupts any long-running queries.
+    public func interrupt() {
+        sqlite3_interrupt(handle)
     }
 
     // MARK: - Handlers
@@ -383,11 +395,11 @@ public final class Connection {
     ///
     /// - Parameter callback: A callback invoked when a transaction is rolled
     ///   back.
-    public func rollbackHook(callback: (() -> Void)?) {
+    public func rollbackHook(callback: _SQLiteRollbackHookCallback?) {
         rollbackHook = callback
         _SQLiteRollbackHook(handle, rollbackHook)
     }
-    private var rollbackHook: (() -> Void)?
+    private var rollbackHook: _SQLiteRollbackHookCallback?
 
     /// Creates or redefines a custom SQL function.
     ///
@@ -478,7 +490,36 @@ public final class Connection {
         return resultCode
     }
 
+    func sync<T>(block: () throws -> T) rethrows -> T {
+        var success: T?
+        var failure: ErrorType?
+
+        let wrapped: () -> Void = {
+            do {
+                success = try block()
+            } catch {
+                failure = error
+            }
+        }
+
+        if dispatch_get_specific(Connection.queueKey) == queueContext {
+            wrapped()
+        } else {
+            dispatch_sync(queue, wrapped)
+        }
+
+        if let failure = failure {
+            try { () -> Void in throw failure }()
+        }
+
+        return success!
+    }
+
     private var queue = dispatch_queue_create("SQLite.Database", DISPATCH_QUEUE_SERIAL)
+
+    private static let queueKey = unsafeBitCast(Connection.self, UnsafePointer<Void>.self)
+
+    private lazy var queueContext: UnsafeMutablePointer<Void> = unsafeBitCast(self, UnsafeMutablePointer<Void>.self)
 
 }
 

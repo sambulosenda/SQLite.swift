@@ -39,8 +39,8 @@ void _SQLiteUpdateHook(sqlite3 * db, _SQLiteUpdateHookCallback _Nullable callbac
 typedef int (^_SQLiteCommitHookCallback)();
 void _SQLiteCommitHook(sqlite3 * db, _SQLiteCommitHookCallback _Nullable callback);
 
-// typedef void (^_SQLiteRollbackHookCallback)(); // rdar://problem/21544081
-void _SQLiteRollbackHook(sqlite3 * db, void (^_Nullable callback)());
+typedef void (^_SQLiteRollbackHookCallback)(); // rdar://problem/21544081
+void _SQLiteRollbackHook(sqlite3 * db, _SQLiteRollbackHookCallback _Null_unspecified callback);
 
 typedef void (^_SQLiteCreateFunctionCallback)(sqlite3_context * context, int argc, sqlite3_value * _Nonnull * _Nonnull argv);
 int _SQLiteCreateFunction(sqlite3 * db, const char * name, int argc, int deterministic, _SQLiteCreateFunctionCallback _Nullable callback);

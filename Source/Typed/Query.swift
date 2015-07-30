@@ -1,14 +1,18 @@
 public protocol QueryType : Expressible {
 
-    static var identifier: String { get }
-
     var clauses: QueryClauses { get set }
 
     init(_ name: String, database: String?)
 
 }
 
-extension QueryType {
+public protocol SchemaType : QueryType {
+
+    static var identifier: String { get }
+
+}
+
+extension SchemaType {
 
     /// Builds a copy of the query with the `SELECT` clause applied.
     ///
@@ -22,8 +26,8 @@ extension QueryType {
     /// - Parameter all: A list of expressions to select.
     ///
     /// - Returns: A query with the given `SELECT` clause applied.
-    public func select(all: Expressible...) -> Self {
-        return select(false, all)
+    public func select(column: Expressible, _ more: Expressible...) -> Self {
+        return select(false, [column] + more)
     }
 
     /// Builds a copy of the query with the `SELECT DISTINCT` clause applied.
@@ -37,8 +41,8 @@ extension QueryType {
     /// - Parameter columns: A list of expressions to select.
     ///
     /// - Returns: A query with the given `SELECT DISTINCT` clause applied.
-    public func select(distinct columns: Expressible...) -> Self {
-        return select(true, columns)
+    public func select(distinct column: Expressible, _ more: Expressible...) -> Self {
+        return select(true, [column] + more)
     }
 
     /// Builds a copy of the query with the `SELECT` clause applied.
@@ -79,7 +83,7 @@ extension QueryType {
     ///     users.select(*)
     ///     // SELECT * FROM "users"
     ///
-    /// - Parameter all: A list of expressions to select.
+    /// - Parameter star: A star literal.
     ///
     /// - Returns: A query with the given `SELECT *` clause applied.
     public func select(star: Star) -> Self {
@@ -93,15 +97,61 @@ extension QueryType {
     ///     users.select(distinct: *)
     ///     // SELECT DISTINCT * FROM "users"
     ///
-    /// - Parameter all: A list of expressions to select.
+    /// - Parameter star: A star literal.
     ///
     /// - Returns: A query with the given `SELECT DISTINCT *` clause applied.
     public func select(distinct star: Star) -> Self {
         return select(distinct: star(nil, nil))
     }
 
-    private func select(distinct: Bool, _ columns: [Expressible]) -> Self {
-        var query = self
+    /// Builds a scalar copy of the query with the `SELECT` clause applied.
+    ///
+    ///     let users = Query("users")
+    ///     let id = Expression<Int64>("id")
+    ///
+    ///     users.select(id)
+    ///     // SELECT "id" FROM "users"
+    ///
+    /// - Parameter all: A list of expressions to select.
+    ///
+    /// - Returns: A query with the given `SELECT` clause applied.
+    public func select<V : Value>(column: Expression<V>) -> ScalarQuery<V> {
+        return select(false, [column])
+    }
+    public func select<V : Value>(column: Expression<V?>) -> ScalarQuery<V?> {
+        return select(false, [column])
+    }
+
+    /// Builds a scalar copy of the query with the `SELECT DISTINCT` clause
+    /// applied.
+    ///
+    ///     let users = Query("users")
+    ///     let email = Expression<String>("email")
+    ///
+    ///     users.select(distinct: email)
+    ///     // SELECT DISTINCT "email" FROM "users"
+    ///
+    /// - Parameter column: A list of expressions to select.
+    ///
+    /// - Returns: A query with the given `SELECT DISTINCT` clause applied.
+    public func select<V : Value>(distinct column: Expression<V>) -> ScalarQuery<V> {
+        return select(true, [column])
+    }
+    public func select<V : Value>(distinct column: Expression<V?>) -> ScalarQuery<V?> {
+        return select(true, [column])
+    }
+
+    public var count: ScalarQuery<Int> {
+        return select(SQLite.count(*))
+    }
+
+}
+
+extension QueryType {
+
+    private func select<Q : QueryType>(distinct: Bool, _ columns: [Expressible]) -> Q {
+        var query = Q.init(clauses.from.name, database: clauses.from.database)
+        query.clauses = clauses
         query.clauses.select = (distinct, columns)
         return query
     }
@@ -565,16 +615,6 @@ extension QueryType {
         ]).expression)
     }
 
-    // MARK: - Aggregate Functions
-
-    public var count: Select<Int> {
-        return Select(select(SQLite.count(*)).expression)
-    }
-
-    public func scalar<T : ExpressionType>(scalar: T) -> Select<T.UnderlyingType> {
-        return Select(select(scalar).expression)
-    }
-
     // MARK: - Array
 
     public var first: Select<Row?> {
@@ -683,7 +723,7 @@ extension QueryType {
 
 /// Queries a collection of chainable helper functions and expressions to build
 /// executable SQL statements.
-public struct Table : QueryType {
+public struct Table : SchemaType {
 
     public static let identifier = "TABLE"
 
@@ -695,7 +735,7 @@ public struct Table : QueryType {
 
 }
 
-public struct View : QueryType {
+public struct View : SchemaType {
 
     public static let identifier = "VIEW"
 
@@ -707,9 +747,19 @@ public struct View : QueryType {
 
 }
 
-public struct VirtualTable : QueryType {
+public struct VirtualTable : SchemaType {
 
     public static let identifier = "VIRTUAL TABLE"
+
+    public var clauses: QueryClauses
+
+    public init(_ name: String, database: String? = nil) {
+        clauses = QueryClauses(name, database: database)
+    }
+
+}
+
+public struct ScalarQuery<V> : QueryType {
 
     public var clauses: QueryClauses
 
@@ -775,6 +825,7 @@ extension Connection {
     public func prepare(query: QueryType) throws -> AnySequence<Row> {
         let expression = query.expression
         let statement = try prepare(expression.template, expression.bindings)
+        print(expression.template, expression.bindings)
 
         let columnNames: [String: Int] = try {
             var (columnNames, idx) = ([String: Int](), 0)
@@ -795,7 +846,9 @@ extension Connection {
                 }
 
                 if column == "*" {
-                    let queries = [query.select(*)] as [QueryType] + query.clauses.join.map { $0.query }
+                    var select = query
+                    select.clauses.select = (false, [Expression<Void>(literal: "*") as Expressible])
+                    let queries = [select] + query.clauses.join.map { $0.query }
                     if !namespace.isEmpty {
                         for q in queries {
                             if q.tableName().expression.template == namespace {
@@ -821,7 +874,7 @@ extension Connection {
         }
     }
 
-    public func scalar<V : Value>(query: Select<V>) throws -> V {
+    public func scalar<V : Value>(query: ScalarQuery<V>) throws -> V {
         let expression = query.expression
         return value(try scalar(expression.template, expression.bindings))
     }
@@ -839,8 +892,10 @@ extension Connection {
     ///
     /// - Returns: The insert’s rowid.
     public func run(query: Insert) throws -> Int64 {
-        try run(query.expression.template, query.expression.bindings)
-        return lastInsertRowid!
+        return try sync {
+            try self.run(query.expression.template, query.expression.bindings)
+            return self.lastInsertRowid!
+        }
     }
 
     /// Runs an `Update` query.
@@ -852,8 +907,10 @@ extension Connection {
     ///
     /// - Returns: The number of updated rows.
     public func run(query: Update) throws -> Int {
-        try run(query.expression.template, query.expression.bindings)
-        return changes
+        return try sync {
+            try self.run(query.expression.template, query.expression.bindings)
+            return self.changes
+        }
     }
 
     /// Runs a `Delete` query.
@@ -864,8 +921,10 @@ extension Connection {
     ///
     /// - Returns: The number of deleted rows.
     public func run(query: Delete) throws -> Int {
-        try run(query.expression.template, query.expression.bindings)
-        return changes
+        return try sync {
+            try self.run(query.expression.template, query.expression.bindings)
+            return self.changes
+        }
     }
 
 }

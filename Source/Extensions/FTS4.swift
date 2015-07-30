@@ -15,6 +15,18 @@ extension Module {
 
 extension VirtualTable {
 
+    /// Builds an expression appended with a `MATCH` query against the given
+    /// pattern.
+    ///
+    ///     let emails = VirtualTable("emails")
+    ///
+    ///     emails.filter(emails.match("Hello"))
+    ///     // SELECT * FROM "emails" WHERE "emails" MATCH 'Hello'
+    ///
+    /// - Parameter pattern: A pattern to match.
+    ///
+    /// - Returns: An expression appended with a `MATCH` query against the given
+    ///   pattern.
     @warn_unused_result public func match(pattern: String) -> Expression<Bool> {
         return "MATCH".infix(tableName(), pattern)
     }
@@ -27,31 +39,77 @@ extension VirtualTable {
         return "MATCH".infix(tableName(), pattern)
     }
 
+    /// Builds a copy of the query with a `WHERE … MATCH` clause.
+    ///
+    ///     let emails = VirtualTable("emails")
+    ///
+    ///     emails.match("Hello")
+    ///     // SELECT * FROM "emails" WHERE "emails" MATCH 'Hello'
+    ///
+    /// - Parameter pattern: A pattern to match.
+    ///
+    /// - Returns: A query with the given `WHERE … MATCH` clause applied.
+    @warn_unused_result public func match(pattern: String) -> QueryType {
+        return filter(match(pattern))
+    }
+
+    @warn_unused_result public func match(pattern: Expression<String>) -> QueryType {
+        return filter(match(pattern))
+    }
+
+    @warn_unused_result public func match(pattern: Expression<String?>) -> QueryType {
+        return filter(match(pattern))
+    }
+
 }
 
-public enum Tokenizer {
+public struct Tokenizer {
 
-    internal static let moduleName = "SQLite.swift"
+    public static let Simple = Tokenizer("simple")
 
-    case Simple
+    public static let Porter = Tokenizer("porter")
 
-    case Porter
+    @warn_unused_result public static func Unicode61(removeDiacritics removeDiacritics: Bool? = nil, tokenchars: Set<Character> = [], separators: Set<Character> = []) -> Tokenizer {
+        var arguments = [String]()
 
-    case Custom(String)
+        if let removeDiacritics = removeDiacritics {
+            arguments.append("removeDiacritics=\(removeDiacritics ? 1 : 0)".quote())
+        }
+
+        if !tokenchars.isEmpty {
+            let joined = "".join(tokenchars.map { String($0) })
+            arguments.append("tokenchars=\(joined)".quote())
+        }
+
+        if !separators.isEmpty {
+            let joined = "".join(separators.map { String($0) })
+            arguments.append("separators=\(joined)".quote())
+        }
+
+        return Tokenizer("unicode61", arguments)
+    }
+
+    @warn_unused_result public static func Custom(name: String) -> Tokenizer {
+        return Tokenizer(Tokenizer.moduleName.quote(), [name.quote()])
+    }
+
+    public let name: String
+
+    public let arguments: [String]
+
+    private init(_ name: String, _ arguments: [String] = []) {
+        self.name = name
+        self.arguments = arguments
+    }
+
+    private static let moduleName = "SQLite.swift"
 
 }
 
-extension Tokenizer: CustomStringConvertible {
+extension Tokenizer : CustomStringConvertible {
 
     public var description: String {
-        switch self {
-        case .Simple:
-            return "simple"
-        case .Porter:
-            return "porter"
-        case .Custom(let tokenizer):
-            return " ".join([Tokenizer.moduleName.quote(), tokenizer.quote("'")])
-        }
+        return " ".join([name] + arguments)
     }
 
 }

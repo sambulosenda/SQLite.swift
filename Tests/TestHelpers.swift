@@ -32,16 +32,16 @@ class SQLiteTestCase : XCTestCase {
         )
     }
 
-    func InsertUsers(names: String...) {
-        InsertUsers(names)
+    func InsertUsers(names: String...) throws {
+        try InsertUsers(names)
     }
 
-    func InsertUsers(names: [String]) {
-        for name in names { InsertUser(name) }
+    func InsertUsers(names: [String]) throws {
+        for name in names { try InsertUser(name) }
     }
 
-    func InsertUser(name: String, age: Int? = nil, admin: Bool = false) -> Statement {
-        return try! db.run(
+    func InsertUser(name: String, age: Int? = nil, admin: Bool = false) throws -> Statement {
+        return try db.run(
             "INSERT INTO \"users\" (email, age, admin) values (?, ?, ?)",
             "\(name)@example.com", age?.datatypeValue, admin.datatypeValue
         )
@@ -98,6 +98,15 @@ let stringOptional = Expression<String?>("stringOptional")
 
 func AssertSQL(@autoclosure expression1: () -> String, @autoclosure _ expression2: () -> Expressible, file: String = __FILE__, line: UInt = __LINE__) {
     XCTAssertEqual(expression1(), expression2().asSQL(), file: file, line: line)
+}
+
+func AssertThrows<T>(@autoclosure expression: () throws -> T, file: String = __FILE__, line: UInt = __LINE__) {
+    do {
+        try expression()
+        XCTFail("expression expected to throw", file: file, line: line)
+    } catch {
+        XCTAssert(true, file: file, line: line)
+    }
 }
 
 let table = Table("table")

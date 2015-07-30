@@ -67,10 +67,10 @@ void _SQLiteCommitHook(sqlite3 * db, _SQLiteCommitHookCallback callback) {
 }
 
 static void __SQLiteRollbackHook(void * context) {
-    ((__bridge void (^ _Nullable )())context)();
+    ((__bridge void (^ _Null_unspecified )())context)();
 }
 
-void _SQLiteRollbackHook(sqlite3 * db, void (^ _Nullable callback)()) {
+void _SQLiteRollbackHook(sqlite3 * db, void (^ _Null_unspecified callback)()) {
     sqlite3_rollback_hook(db, __SQLiteRollbackHook, (__bridge void *)callback);
 }
 

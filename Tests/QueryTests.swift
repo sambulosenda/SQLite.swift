@@ -202,7 +202,7 @@ class QueryTests : XCTestCase {
     }
 
     func test_scalar_returnsScalarExpression() {
-        AssertSQL("SELECT count(\"intOptional\") FROM \"users\"", users.scalar(intOptional.count))
+        AssertSQL("SELECT count(\"intOptional\") FROM \"users\"", users.select(intOptional.count))
     }
 
     func test_first_returnsSelectExpressionWithLimit() {
